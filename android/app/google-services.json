@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "257992393532",
+    "project_id": "goatkart",
+    "storage_bucket": "goatkart.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:257992393532:android:fc68a026d157e3e2065439",
+        "android_client_info": {
+          "package_name": "com.example.goatkart"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAguqFk2PuyyPmaC1S6GsSvj9HH2Fjgr_8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
