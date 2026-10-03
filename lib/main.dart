@@ -797,24 +797,47 @@ Future<Map<String, String>?> reverseGeocode(double lat, double lon) async {
       headers: const {
         'User-Agent': 'GoatKartApp/1.0 (contact@goatkart.app)',
       },
-    ).timeout(const Duration(seconds: 10));
+    ).timeout(const Duration(seconds: 12));
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       if (data is Map<String, dynamic>) {
         final a = data['address'];
         if (a is Map) {
-          final house = [a['house_number'], a['road'], a['suburb'], a['neighbourhood']]
-              .where((e) => e != null && e.toString().trim().isNotEmpty)
-              .join(', ');
-          final village = a['village'] ?? a['town'] ?? a['city'] ?? a['suburb'] ?? a['hamlet'] ?? a['municipality'] ?? '';
-          final mandal = a['subdistrict'] ?? a['county'] ?? a['taluk'] ?? a['city_district'] ?? '';
+          final house = [
+            a['building'],
+            a['house_number'],
+            a['road'],
+            a['pedestrian'],
+            a['residential'],
+            a['suburb'],
+            a['neighbourhood'],
+          ].where((e) => e != null && e.toString().trim().isNotEmpty).join(', ');
+
+          final village = a['village'] ??
+              a['hamlet'] ??
+              a['town'] ??
+              a['city_district'] ??
+              a['suburb'] ??
+              a['city'] ??
+              a['municipality'] ??
+              '';
+
+          final mandal = a['subdistrict'] ??
+              a['county'] ??
+              a['taluk'] ??
+              a['tehsil'] ??
+              a['district'] ??
+              '';
+
           final district = a['state_district'] ?? a['district'] ?? a['city'] ?? '';
           final state = a['state'] ?? '';
           final pincode = (a['postcode'] ?? '').toString().replaceAll(RegExp(r'\D'), '');
 
+          final fullDisplay = (data['display_name'] ?? '').toString();
+
           return {
-            'house': house.isNotEmpty ? house : (data['display_name'] ?? '').toString().split(',').first,
+            'house': house.isNotEmpty ? house : fullDisplay.split(',').take(2).join(','),
             'village': village.toString(),
             'mandal': mandal.toString(),
             'district': district.toString(),
@@ -826,10 +849,9 @@ Future<Map<String, String>?> reverseGeocode(double lat, double lon) async {
     }
   } catch (_) {}
 
-  // Guaranteed fallback so form is always filled out successfully
   return {
-    'house': 'GPS Location',
-    'village': 'Area near Lat: ${lat.toStringAsFixed(3)}, Lon: ${lon.toStringAsFixed(3)}',
+    'house': 'GPS Pin Location',
+    'village': 'Coordinates: ${lat.toStringAsFixed(4)}, ${lon.toStringAsFixed(4)}',
     'mandal': '',
     'district': '',
     'state': '',
@@ -3748,52 +3770,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   /// Listens to the GPS for a few seconds and keeps the MOST ACCURATE
   /// reading (instead of trusting the first, often rough, position).
   Future<Position> getBestPosition() async {
-    Position? best;
-    final completer = Completer<Position>();
-    StreamSubscription<Position>? sub;
-
-    final timer = Timer(const Duration(seconds: 15), () {
-      if (completer.isCompleted) return;
-
-      if (best != null) {
-        completer.complete(best!);
-      } else {
-        completer.completeError(TimeoutException('gps'));
-      }
-    });
-
-    sub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 0,
-      ),
-    ).listen(
-      (p) {
-        if (best == null || p.accuracy < best!.accuracy) {
-          best = p;
-        }
-
-        // Good enough: stop early.
-        if (p.accuracy <= 30 && !completer.isCompleted) {
-          completer.complete(p);
-        }
-      },
-      onError: (Object e) {
-        if (!completer.isCompleted) {
-          if (best != null) {
-            completer.complete(best!);
-          } else {
-            completer.completeError(e);
-          }
-        }
-      },
-    );
-
     try {
-      return await completer.future;
-    } finally {
-      timer.cancel();
-      await sub.cancel();
+      // Force Android FusedLocationProvider to fetch fresh high-accuracy satellite GPS fix
+      return await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 15),
+      );
+    } catch (_) {
+      try {
+        final last = await Geolocator.getLastKnownPosition();
+        if (last != null) return last;
+      } catch (_) {}
+      return await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 8),
+      );
     }
   }
 
