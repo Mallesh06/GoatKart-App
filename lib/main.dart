@@ -910,11 +910,34 @@ class _SplashScreenState extends State<SplashScreen>
     });
   }
 
-  void _navigateToNextScreen() {
+  void _navigateToNextScreen() async {
     if (!mounted) return;
     final user = FirebaseAuth.instance.currentUser;
-    final Widget targetScreen =
-        user != null ? const HomeScreen() : const AuthScreen();
+
+    Widget targetScreen = const AuthScreen();
+
+    if (user != null) {
+      if (user.email?.toLowerCase() == kAdminEmail.toLowerCase()) {
+        targetScreen = const AdminDashboard();
+      } else {
+        try {
+          final adminDoc = await FirebaseFirestore.instance
+              .collection('admins')
+              .doc(user.uid)
+              .get()
+              .timeout(const Duration(seconds: 4));
+          if (adminDoc.exists) {
+            targetScreen = const AdminDashboard();
+          } else {
+            targetScreen = const HomeScreen();
+          }
+        } catch (_) {
+          targetScreen = const HomeScreen();
+        }
+      }
+    }
+
+    if (!mounted) return;
 
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
