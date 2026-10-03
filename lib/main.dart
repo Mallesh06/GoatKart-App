@@ -778,60 +778,6 @@ Widget buildAddressForm(AddressFields f) {
 /// Looks up the address of a GPS point and splits it into
 /// house / village / mandal / district / state / pincode.
 Future<Map<String, String>?> reverseGeocode(double lat, double lon) async {
-  String house = '';
-  String village = '';
-  String mandal = '';
-  String district = '';
-  String state = '';
-  String pincode = '';
-
-  // 1. Primary: BigDataCloud Reverse Geocoder (High accuracy for Indian localities & postal codes)
-  try {
-    final uri = Uri.https(
-      'api.bigdatacloud.net',
-      '/data/reverse-geocode-client',
-      {
-        'latitude': lat.toString(),
-        'longitude': lon.toString(),
-        'localityLanguage': 'en',
-      },
-    );
-
-    final response = await http.get(uri).timeout(const Duration(seconds: 8));
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      if (data is Map<String, dynamic>) {
-        final locality = (data['locality'] ?? '').toString();
-        final city = (data['city'] ?? '').toString();
-        final principalSubdivision = (data['principalSubdivision'] ?? '').toString();
-        final postcode = (data['postcode'] ?? '').toString().replaceAll(RegExp(r'\D'), '');
-
-        final adminValues = (data['localityInfo']?['administrative'] as List?) ?? [];
-
-        for (final item in adminValues) {
-          if (item is Map) {
-            final name = (item['name'] ?? '').toString();
-            final order = item['order'] ?? 0;
-
-            if (order == 6 || order == 7) {
-              if (village.isEmpty) village = name;
-            } else if (order == 5) {
-              if (mandal.isEmpty) mandal = name;
-            } else if (order == 4) {
-              if (district.isEmpty) district = name;
-            }
-          }
-        }
-
-        if (village.isEmpty) village = locality.isNotEmpty ? locality : city;
-        if (state.isEmpty) state = principalSubdivision;
-        if (pincode.isEmpty && postcode.length == 6) pincode = postcode;
-      }
-    }
-  } catch (_) {}
-
-  // 2. Secondary: OpenStreetMap Nominatim for street/house/pincode
   try {
     final uri = Uri.https(
       'nominatim.openstreetmap.org',
@@ -851,77 +797,86 @@ Future<Map<String, String>?> reverseGeocode(double lat, double lon) async {
       headers: const {
         'User-Agent': 'GoatKartApp/1.0 (contact@goatkart.app)',
       },
-    ).timeout(const Duration(seconds: 8));
+    ).timeout(const Duration(seconds: 12));
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       if (data is Map<String, dynamic>) {
         final a = data['address'];
         if (a is Map) {
-          final h = [
-            a['building'],
-            a['house_number'],
-            a['road'],
-            a['pedestrian'],
-            a['residential'],
-            a['suburb'],
-            a['neighbourhood'],
-          ].where((e) => e != null && e.toString().trim().isNotEmpty).join(', ');
-
-          if (h.isNotEmpty) house = h;
-
-          if (village.isEmpty) {
-            village = (a['village'] ?? a['town'] ?? a['city'] ?? a['suburb'] ?? a['hamlet'] ?? '').toString();
+          String pick(List<String> keys) {
+            for (final k in keys) {
+              final v = a[k];
+              if (v != null && v.toString().trim().isNotEmpty) {
+                return v.toString().trim();
+              }
+            }
+            return '';
           }
 
-          if (mandal.isEmpty) {
-            mandal = (a['subdistrict'] ?? a['county'] ?? a['taluk'] ?? a['tehsil'] ?? '').toString();
+          String strip(String value, List<String> words) {
+            var t = value.trim();
+            for (final w in words) {
+              if (t.toLowerCase().endsWith(w.toLowerCase())) {
+                t = t.substring(0, t.length - w.length).trim();
+              }
+            }
+            return t;
           }
 
-          if (district.isEmpty) {
-            district = (a['state_district'] ?? a['district'] ?? a['city'] ?? '').toString();
+          final houseNo = pick(['building', 'house_number']);
+          final road = pick(['road', 'pedestrian', 'residential', 'path', 'suburb', 'neighbourhood']);
+
+          var house = [houseNo, road].where((e) => e.isNotEmpty).join(', ');
+          if (house.isEmpty) {
+            house = pick(['neighbourhood', 'suburb', 'hamlet']);
           }
 
-          if (state.isEmpty) {
-            state = (a['state'] ?? '').toString();
-          }
+          final village = pick([
+            'village',
+            'hamlet',
+            'town',
+            'suburb',
+            'city_district',
+            'city',
+            'municipality',
+          ]);
 
-          if (pincode.isEmpty) {
-            final pc = (a['postcode'] ?? '').toString().replaceAll(RegExp(r'\D'), '');
-            if (pc.length == 6) pincode = pc;
-          }
+          final mandal = strip(
+            pick(['subdistrict', 'county', 'taluk', 'tehsil']),
+            [' mandal', ' taluk', ' tehsil'],
+          );
+
+          var district = strip(
+            pick(['state_district', 'district', 'city']),
+            [' district'],
+          );
+
+          final state = pick(['state']);
+          final pincode = pick(['postcode']).replaceAll(RegExp(r'\D'), '');
+
+          final fullDisplay = (data['display_name'] ?? '').toString();
+
+          return {
+            'house': house.isNotEmpty ? house : fullDisplay.split(',').take(2).join(','),
+            'village': village,
+            'mandal': mandal,
+            'district': district,
+            'state': state,
+            'pincode': pincode,
+          };
         }
       }
     }
   } catch (_) {}
 
-  // 3. Fallback: Official India Post API lookup by Village/District if pincode is missing
-  if (pincode.isEmpty && (village.isNotEmpty || district.isNotEmpty)) {
-    try {
-      final searchArea = village.isNotEmpty ? village : district;
-      final uri = Uri.https('api.postalpincode.in', '/postoffice/$searchArea');
-      final response = await http.get(uri).timeout(const Duration(seconds: 5));
-
-      if (response.statusCode == 200) {
-        final list = jsonDecode(response.body);
-        if (list is List && list.isNotEmpty) {
-          final poList = list.first['PostOffice'];
-          if (poList is List && poList.isNotEmpty) {
-            final pc = (poList.first['Pincode'] ?? '').toString();
-            if (pc.length == 6) pincode = pc;
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
   return {
-    'house': house.isNotEmpty ? house : 'GPS Pin Location',
-    'village': village,
-    'mandal': mandal,
-    'district': district,
-    'state': state,
-    'pincode': pincode,
+    'house': 'GPS Pin Location',
+    'village': '',
+    'mandal': '',
+    'district': '',
+    'state': '',
+    'pincode': '',
   };
 }
 
@@ -3836,21 +3791,53 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   /// Listens to the GPS for a few seconds and keeps the MOST ACCURATE
   /// reading (instead of trusting the first, often rough, position).
   Future<Position> getBestPosition() async {
+    Position? best;
+    final completer = Completer<Position>();
+    StreamSubscription<Position>? sub;
+
+    final timer = Timer(const Duration(seconds: 12), () {
+      if (completer.isCompleted) return;
+
+      if (best != null) {
+        completer.complete(best!);
+      } else {
+        completer.completeError(TimeoutException('gps'));
+      }
+    });
+
+    sub = Geolocator.getPositionStream(
+      locationSettings: AndroidSettings(
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 0,
+        forceLocationManager: true, // Bypass cell towers and force direct hardware GPS receiver
+      ),
+    ).listen(
+      (p) {
+        if (best == null || p.accuracy < best!.accuracy) {
+          best = p;
+        }
+
+        // Stop early when high-accuracy satellite GPS fix is received
+        if (p.accuracy <= 20 && !completer.isCompleted) {
+          completer.complete(p);
+        }
+      },
+      onError: (Object e) {
+        if (!completer.isCompleted) {
+          if (best != null) {
+            completer.complete(best!);
+          } else {
+            completer.completeError(e);
+          }
+        }
+      },
+    );
+
     try {
-      // Force Android FusedLocationProvider to fetch fresh high-accuracy satellite GPS fix
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 15),
-      );
-    } catch (_) {
-      try {
-        final last = await Geolocator.getLastKnownPosition();
-        if (last != null) return last;
-      } catch (_) {}
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 8),
-      );
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      await sub.cancel();
     }
   }
 
